@@ -150,3 +150,57 @@ test('createStore returns null when storage is not configured', () => {
   assert.equal(createStore({}), null);
   assert.equal(createStore({ LOCAL_STORE: '1' }).kind, 'file');
 });
+
+// ---- Apps Script backend: run the real Code.gs against a fake Sheets runtime ----
+import { readFile } from 'node:fs/promises';
+import vm from 'node:vm';
+import { createAppsScriptStore } from '../lib/store.mjs';
+
+async function fakeAppsScript(token) {
+  const sheets = {};
+  const makeSheet = name => {
+    const rows = []; // rows[0] is the header once written
+    return sheets[name] = {
+      rows, getLastRow: () => rows.length, setFrozenRows() {},
+      getRange(r, c, nr = 1, nc = 1) {
+        return {
+          setValues(vals) { vals.forEach((v, i) => { rows[r - 1 + i] = rows[r - 1 + i] || []; v.forEach((x, j) => { rows[r - 1 + i][c - 1 + j] = x; }); }); return this; },
+          setFontWeight() { return this; }, setNumberFormat() { return this; },
+          getValues() { return Array.from({ length: nr }, (_, i) => Array.from({ length: nc }, (_, j) => (rows[r - 1 + i] || [])[c - 1 + j] ?? '')); }
+        };
+      }
+    };
+  };
+  const code = (await readFile(new URL('../apps-script/Code.gs', import.meta.url), 'utf8')).replace("'PASTE_YOUR_TOKEN_HERE';\n\nconst LEAD", `'${token}';\n\nconst LEAD`);
+  const ctx = {
+    SpreadsheetApp: { getActiveSpreadsheet: () => ({ getSheetByName: n => sheets[n] || null, insertSheet: n => makeSheet(n) }) },
+    ContentService: { MimeType: { JSON: 'json' }, createTextOutput: text => ({ text, setMimeType() { return this; } }) },
+    LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
+    JSON, Date, Math, String, Number
+  };
+  vm.createContext(ctx); vm.runInContext(code + '\nthis.doPost = doPost; this.doGet = doGet;', ctx);
+  return { sheets, fetchImpl: async (url, init) => ({ ok: true, status: 200, json: async () => JSON.parse(ctx.doPost({ postData: { contents: init.body } }).text) }) };
+}
+
+test('Apps Script backend: add, dedupe, list, update, events, auth', async () => {
+  const fake = await fakeAppsScript('tok123');
+  const store = createAppsScriptStore({ url: 'https://script.google.com/x', token: 'tok123', fetchImpl: fake.fetchImpl });
+  const lead = { id: 'a1', created_at: new Date().toISOString(), name: '=HYPERLINK("x")', phone: '9876543210', class_band: '5-7', status: 'new', notes: '', updated_at: '' };
+  assert.deepEqual(await store.addLeadUnique(lead, 86400000), { duplicate: false });
+  assert.deepEqual(await store.addLeadUnique({ ...lead, id: 'a2' }, 86400000), { duplicate: true });
+  assert.deepEqual(await store.addLeadUnique({ ...lead, id: 'a3', phone: '9123456789' }, 86400000), { duplicate: false });
+  const leads = await store.listLeads();
+  assert.equal(leads.length, 2); assert.equal(leads[0].name, '=HYPERLINK("x")'); assert.equal(fake.sheets.leads.rows[0][0], 'id'); // header written
+  assert.equal(await store.updateLead('a1', { status: 'hot', notes: 'call 5pm' }), true);
+  assert.equal(await store.updateLead('missing', { status: 'hot' }), false);
+  const after = (await store.listLeads()).find(l => l.id === 'a1'); assert.equal(after.status, 'hot'); assert.equal(after.notes, 'call 5pm');
+  await assert.rejects(store.updateLead('a1', { status: 'rich' }), /bad_status/);
+  await store.addEvent({ ts: new Date().toISOString(), type: 'cta', action: 'call', page: '/' });
+  assert.equal((await store.listEvents())[0].action, 'call');
+  const wrong = createAppsScriptStore({ url: 'u', token: 'bad', fetchImpl: fake.fetchImpl });
+  await assert.rejects(wrong.listLeads(), /unauthorized/);
+});
+
+test('createStore prefers Apps Script when its settings are present', () => {
+  assert.equal(createStore({ APPS_SCRIPT_URL: 'https://x', APPS_SCRIPT_TOKEN: 't' }).kind, 'apps-script');
+});

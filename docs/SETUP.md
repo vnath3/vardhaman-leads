@@ -1,6 +1,16 @@
 # Setup (about 20 minutes)
 
-## 1. Google Sheet (the database)
+## 1. Google Sheet (the database), easiest way: Apps Script (about 5 minutes)
+1. Create a blank Google Sheet named "Vardhaman Leads".
+2. Extensions > Apps Script. Delete the sample code and paste the contents of `apps-script/Code.gs`.
+3. On the line `const TOKEN = 'PASTE_YOUR_TOKEN_HERE';` put a long random string (this is `APPS_SCRIPT_TOKEN`).
+4. Deploy > New deployment > type **Web app** > Execute as **Me** > Who has access **Anyone** > Deploy. Approve the permissions. Copy the **Web app URL** (this is `APPS_SCRIPT_URL`).
+5. On Netlify add `APPS_SCRIPT_URL` and `APPS_SCRIPT_TOKEN`, then redeploy. The `leads` and `events` tabs are created automatically.
+6. If you change the script later: Deploy > Manage deployments > Edit > New version.
+
+The address alone is useless to others: every request must carry the token.
+
+## 1b. Alternative: Google Cloud service account (stronger, more steps)
 1. Create a blank Google Sheet named "Vardhaman Leads". Copy the long id from its URL (between `/d/` and `/edit`). That is `GOOGLE_SHEET_ID`.
 2. Google Cloud Console: create a project, enable **Google Sheets API**.
 3. IAM & Admin > Service accounts > Create. Open it > Keys > Add key > JSON. A file downloads. Its whole content is `GOOGLE_SERVICE_ACCOUNT_JSON`.
