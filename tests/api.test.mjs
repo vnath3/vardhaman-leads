@@ -61,6 +61,10 @@ test('lead endpoint: saves, dedupes, blocks bots and foreign origins, answers 50
   assert.equal((await res.json()).duplicate, true); assert.equal((await store.listLeads()).length, 1);
   res = await handleLead(post('https://x.test/api/lead', { ...goodLead, phone: '9123456789', website: 'bot' }), { store, env });
   assert.equal(res.status, 200); assert.equal((await store.listLeads()).length, 1);
+  for (const [origin, allowed] of [['https://deploy-preview-7--va-academy.netlify.app', true], ['https://preview--va-academy.netlify.app', true], ['https://deploy-preview-7--va-academy.netlify.app.evil.example', false], ['https://evil--va-academy.netlify.app', false]]) {
+    const r = await handleLead(new Request('https://x.test/api/lead', { method: 'OPTIONS', headers: { origin } }), { store, env });
+    assert.equal(r.headers.get('access-control-allow-origin'), allowed ? origin : null, origin);
+  }
   res = await handleLead(post('https://x.test/api/lead', goodLead, { origin: 'https://evil.example' }), { store, env });
   assert.equal(res.status, 403);
   res = await handleLead(post('https://x.test/api/lead', { name: 'A' }), { store, env });
