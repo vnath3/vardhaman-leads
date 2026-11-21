@@ -135,10 +135,10 @@ test('Google Sheets store talks to the Sheets API correctly (mocked)', async () 
     if (u.includes('oauth2.googleapis.com')) return ok({ access_token: 't', expires_in: 3600 });
     if (u.includes('?fields=sheets')) return ok({ sheets: [{ properties: { title: 'Sheet1' } }] });
     if (u.endsWith(':batchUpdate')) return ok({});
-    if (u.includes('!A1:A1')) return ok({ values: [['id']] });
+    if (u.includes('!1:1')) return ok({ values: [['id', 'created_at', 'name', 'phone', 'class_band', 'source', 'utm_source', 'utm_medium', 'utm_campaign', 'consent_version', 'status', 'notes', 'updated_at', 'city', 'region', 'device', 'trigger', 'area', 'lost_reason', 'contacted_at', 'repeats']] });
     if (u.includes(':append')) { rows.push(JSON.parse(init.body).values[0]); return ok({}); }
-    if (u.includes('values/leads!A2:M')) return ok({ values: rows });
-    if (u.includes('values/leads!K')) { const m = u.match(/!K(\d+):M/); rows[Number(m[1]) - 2].splice(10, 3, ...JSON.parse(init.body).values[0]); return ok({}); }
+    if (u.includes('values/leads!A') && init.method === 'PUT') { const m = u.match(/!A(\d+):U/); rows[Number(m[1]) - 2] = JSON.parse(init.body).values[0]; return ok({}); }
+    if (u.includes('values/leads!A2:U')) return ok({ values: rows });
     return ok({});
   };
   const store = createSheetsStore({ sheetId: 'abc', serviceAccountJson: { client_email: 'bot@x.iam.gserviceaccount.com', private_key: privateKey }, fetchImpl });
@@ -146,7 +146,7 @@ test('Google Sheets store talks to the Sheets API correctly (mocked)', async () 
   assert.equal(rows[0][2], "'=HYPERLINK(\"x\")"); // formula injection neutralised
   assert.equal((await store.listLeads())[0].phone, '9876543210');
   assert.equal(await store.updateLead('a1', { status: 'hot', notes: 'ok' }), true);
-  assert.equal(rows[0][10], 'hot'); assert.equal(await store.updateLead('nope', { status: 'hot' }), false);
+  assert.equal(rows[0][10], 'hot'); assert.equal(rows[0][19] !== '', true, 'contacted_at stamped on first status change'); assert.equal(await store.updateLead('nope', { status: 'hot' }), false);
   assert.ok(calls.some(([m, u]) => m === 'POST' && u.endsWith(':batchUpdate')), 'creates missing tabs');
 });
 
@@ -165,7 +165,7 @@ async function fakeAppsScript(token) {
   const makeSheet = name => {
     const rows = []; // rows[0] is the header once written
     return sheets[name] = {
-      rows, getLastRow: () => rows.length, setFrozenRows() {},
+      rows, getLastRow: () => rows.length, getLastColumn: () => rows.reduce((m, r) => Math.max(m, r.length), 0), setFrozenRows() {},
       getRange(r, c, nr = 1, nc = 1) {
         return {
           setValues(vals) { vals.forEach((v, i) => { rows[r - 1 + i] = rows[r - 1 + i] || []; v.forEach((x, j) => { rows[r - 1 + i][c - 1 + j] = x; }); }); return this; },
@@ -191,13 +191,19 @@ test('Apps Script backend: add, dedupe, list, update, events, auth', async () =>
   const store = createAppsScriptStore({ url: 'https://script.google.com/x', token: 'tok123', fetchImpl: fake.fetchImpl });
   const lead = { id: 'a1', created_at: new Date().toISOString(), name: '=HYPERLINK("x")', phone: '9876543210', class_band: '5-7', status: 'new', notes: '', updated_at: '' };
   assert.deepEqual(await store.addLeadUnique(lead, 86400000), { duplicate: false });
-  assert.deepEqual(await store.addLeadUnique({ ...lead, id: 'a2' }, 86400000), { duplicate: true });
+  const dup = await store.addLeadUnique({ ...lead, id: 'a2' }, 86400000);
+  assert.equal(dup.duplicate, true); assert.equal(dup.existing.id, 'a1');
   assert.deepEqual(await store.addLeadUnique({ ...lead, id: 'a3', phone: '9123456789' }, 86400000), { duplicate: false });
   const leads = await store.listLeads();
   assert.equal(leads.length, 2); assert.equal(leads[0].name, '=HYPERLINK("x")'); assert.equal(fake.sheets.leads.rows[0][0], 'id'); // header written
-  assert.equal(await store.updateLead('a1', { status: 'hot', notes: 'call 5pm' }), true);
+  assert.equal(await store.updateLead('a1', { status: 'hot', notes: 'call 5pm', area: 'Bansilal Nagar', repeats: '2' }), true);
   assert.equal(await store.updateLead('missing', { status: 'hot' }), false);
-  const after = (await store.listLeads()).find(l => l.id === 'a1'); assert.equal(after.status, 'hot'); assert.equal(after.notes, 'call 5pm');
+  const after = (await store.listLeads()).find(l => l.id === 'a1'); assert.equal(after.status, 'hot'); assert.equal(after.notes, 'call 5pm'); assert.equal(after.area, 'Bansilal Nagar'); assert.equal(after.repeats, '2');
+  assert.ok(after.contacted_at, 'contacted_at set when the lead first leaves new'); const firstContact = after.contacted_at;
+  await store.updateLead('a1', { status: 'lost', lost_reason: 'price' });
+  let lost = (await store.listLeads()).find(l => l.id === 'a1'); assert.equal(lost.lost_reason, 'price'); assert.equal(lost.contacted_at, firstContact, 'contacted_at never moves');
+  await store.updateLead('a1', { status: 'contacted' });
+  lost = (await store.listLeads()).find(l => l.id === 'a1'); assert.equal(lost.lost_reason, '', 'lost reason cleared when no longer lost');
   await assert.rejects(store.updateLead('a1', { status: 'rich' }), /bad_status/);
   await store.addEvent({ ts: new Date().toISOString(), type: 'cta', action: 'call', page: '/' });
   assert.equal((await store.listEvents())[0].action, 'call');
@@ -207,4 +213,59 @@ test('Apps Script backend: add, dedupe, list, update, events, auth', async () =>
 
 test('createStore prefers Apps Script when its settings are present', () => {
   assert.equal(createStore({ APPS_SCRIPT_URL: 'https://x', APPS_SCRIPT_TOKEN: 't' }).kind, 'apps-script');
+});
+
+
+// ---- new product fields: speed to contact, repeats, geo, device/trigger, area, lost reason ----
+test('lead stores city, device and trigger; repeat enquiries are noted instead of dropped', async () => {
+  reset(); const store = await freshStore();
+  const send = (extra = {}, geo = { city: 'Chhatrapati Sambhajinagar', subdivision: { name: 'Maharashtra' } }) => handleLead(post('https://x.test/api/lead', { ...goodLead, device: 'mobile', trigger: 'auto-scroll', ...extra }, { origin: 'https://va-academy.netlify.app' }), { store, env, geo });
+  assert.equal((await send()).status, 200);
+  let [lead] = await store.listLeads();
+  assert.equal(lead.city, 'Chhatrapati Sambhajinagar'); assert.equal(lead.region, 'Maharashtra'); assert.equal(lead.device, 'mobile'); assert.equal(lead.trigger, 'auto-scroll'); assert.equal(lead.repeats, '0');
+  const again = await (await send({ device: 'desktop', trigger: 'button' })).json();
+  assert.equal(again.duplicate, true);
+  [lead] = await store.listLeads();
+  assert.equal((await store.listLeads()).length, 1); assert.equal(lead.repeats, '1'); assert.match(lead.notes, /Repeat enquiry \d\d-\d\d \d\d:\d\d \(desktop, button\)/);
+  await send({ device: 'toaster', trigger: 'hacked' }, null);
+  [lead] = await store.listLeads(); assert.equal(lead.repeats, '2');
+  reset(); const fresh = await freshStore(); // junk device/trigger/geo are ignored, not stored
+  await handleLead(post('https://x.test/api/lead', { ...goodLead, device: '<b>', trigger: 'x' }), { store: fresh, env, geo: undefined });
+  const [clean] = await fresh.listLeads(); assert.equal(clean.device, ''); assert.equal(clean.trigger, ''); assert.equal(clean.city, '');
+});
+
+test('admin can set area and lost reason; contacted_at is stamped once', async () => {
+  reset(); const store = await freshStore();
+  await handleLead(post('https://x.test/api/lead', goodLead), { store, env });
+  const { id } = (await store.listLeads())[0];
+  const login = await handleAdmin(new Request('https://x.test/api/admin/login', { method: 'POST', headers: { 'x-requested-with': 'fetch' }, body: JSON.stringify({ password: 'correct horse' }) }), { store, env });
+  const headers = { cookie: login.headers.get('set-cookie').split(';')[0], 'x-requested-with': 'fetch' };
+  const upd = body => handleAdmin(new Request('https://x.test/api/admin/status', { method: 'POST', headers, body: JSON.stringify({ id, ...body }) }), { store, env });
+  assert.equal((await upd({ area: 'Bansilal Nagar' })).status, 200);
+  assert.equal((await store.listLeads())[0].contacted_at, '', 'editing the area is not a contact');
+  assert.equal((await upd({ status: 'lost', lost_reason: 'price' })).status, 200);
+  const first = (await store.listLeads())[0]; assert.equal(first.lost_reason, 'price'); assert.ok(first.contacted_at);
+  assert.equal((await upd({ lost_reason: 'because' })).status, 422);
+  await upd({ status: 'hot' }); const hot = (await store.listLeads())[0];
+  assert.equal(hot.lost_reason, ''); assert.equal(hot.contacted_at, first.contacted_at); assert.equal(hot.area, 'Bansilal Nagar');
+});
+
+test('stats: speed to first contact, stale leads, trigger funnel, device, city, lost reasons', () => {
+  const now = new Date('2026-11-21T12:00:00Z');
+  const L = (o) => ({ status: 'new', class_band: '5-7', source: '', utm_source: '', device: '', trigger: '', city: '', region: '', lost_reason: '', contacted_at: '', ...o });
+  const leads = [
+    L({ created_at: '2026-11-21T10:00:00Z', status: 'contacted', contacted_at: '2026-11-21T10:20:00Z', trigger: 'button', device: 'mobile', city: 'Pune', region: 'Maharashtra' }),
+    L({ created_at: '2026-11-21T08:00:00Z', status: 'hot', contacted_at: '2026-11-21T10:00:00Z', trigger: 'auto-scroll', device: 'desktop' }),
+    L({ created_at: '2026-11-19T08:00:00Z' }), // still new after >24h
+    L({ created_at: '2026-11-21T11:30:00Z' }), // new, under an hour old: not counted against speed
+    L({ created_at: '2026-11-18T08:00:00Z', status: 'lost', lost_reason: 'price', contacted_at: '2026-11-18T09:00:00Z' })
+  ];
+  const events = [{ ts: '2026-11-21T09:00:00Z', type: 'form_view', action: 'button' }, { ts: '2026-11-21T09:01:00Z', type: 'form_view', action: 'button' }, { ts: '2026-11-21T09:02:00Z', type: 'form_view', action: 'auto-scroll' }];
+  const s = summarize(leads, events, now, 30);
+  assert.equal(s.response.contacted, 3); assert.equal(s.response.medianMin, 60); assert.equal(s.response.stale, 1); assert.equal(s.response.waiting, 2);
+  assert.equal(s.response.within1hPct, 50, 'eligible = 3 contacted + the 2-day-old uncontacted lead; 2 of those 4 were reached within an hour');
+  const button = s.byTrigger.find(r => r.trigger === 'button'); assert.deepEqual([button.opens, button.leads, button.pct], [2, 1, 50]);
+  assert.deepEqual(s.byDevice.map(r => r[0]).sort(), ['desktop', 'mobile', 'unknown']);
+  assert.equal(s.byCity[0][0] === 'Unknown' || s.byCity.some(r => r[0] === 'Pune, Maharashtra'), true);
+  assert.equal(s.lostReasons.price, 1);
 });

@@ -6,7 +6,8 @@
  */
 const TOKEN = 'PASTE_YOUR_TOKEN_HERE';
 
-const LEAD_COLUMNS = ['id', 'created_at', 'name', 'phone', 'class_band', 'source', 'utm_source', 'utm_medium', 'utm_campaign', 'consent_version', 'status', 'notes', 'updated_at'];
+const LEAD_COLUMNS = ['id', 'created_at', 'name', 'phone', 'class_band', 'source', 'utm_source', 'utm_medium', 'utm_campaign', 'consent_version', 'status', 'notes', 'updated_at',
+  'city', 'region', 'device', 'trigger', 'area', 'lost_reason', 'contacted_at', 'repeats']; // keep in sync with lib/config.mjs
 const EVENT_COLUMNS = ['ts', 'type', 'action', 'page'];
 const STATUSES = ['new', 'contacted', 'hot', 'demo_booked', 'enrolled', 'lost'];
 const MAX_ROWS = 5000;
@@ -36,6 +37,8 @@ function tab(name, columns) {
   if (sh.getLastRow() === 0) {
     sh.getRange(1, 1, 1, columns.length).setValues([columns]).setFontWeight('bold');
     sh.setFrozenRows(1);
+  } else if (sh.getLastColumn() < columns.length) { // columns were added in a newer version: extend the header row
+    sh.getRange(1, 1, 1, columns.length).setValues([columns]).setFontWeight('bold');
   }
   return sh;
 }
@@ -65,7 +68,7 @@ function handle(body) {
       const since = Date.now() - Number(body.windowMs);
       const recent = readRows(sh, LEAD_COLUMNS).slice(-300);
       for (var i = 0; i < recent.length; i++) {
-        if (recent[i][3] === String(lead.phone) && new Date(recent[i][1]).getTime() > since) return { ok: true, duplicate: true };
+        if (recent[i][3] === String(lead.phone) && new Date(recent[i][1]).getTime() > since) return { ok: true, duplicate: true, existing: recent[i] };
       }
     }
     appendRow(sh, LEAD_COLUMNS, lead);
@@ -81,10 +84,20 @@ function handle(body) {
     const ids = sh.getRange(2, 1, last - 1, 1).getValues();
     for (var r = 0; r < ids.length; r++) {
       if (String(ids[r][0]) === String(body.id)) {
-        const rowNum = r + 2;
-        const cur = sh.getRange(rowNum, 11, 1, 3).getValues()[0].map(String); // status, notes, updated_at
-        const next = [patch.status !== undefined ? patch.status : cur[0], patch.notes !== undefined ? String(patch.notes).slice(0, 500) : cur[1], new Date().toISOString()];
-        sh.getRange(rowNum, 11, 1, 3).setNumberFormat('@').setValues([next]);
+        const rowNum = r + 2, now = new Date().toISOString();
+        const row = sh.getRange(rowNum, 1, 1, LEAD_COLUMNS.length).getValues()[0].map(String);
+        const cur = {}; LEAD_COLUMNS.forEach(function (c, k) { cur[c] = row[k] === undefined ? '' : row[k]; });
+        if (patch.notes !== undefined) cur.notes = String(patch.notes).slice(0, 500);
+        if (patch.area !== undefined) cur.area = String(patch.area).slice(0, 60);
+        if (patch.lost_reason !== undefined) cur.lost_reason = String(patch.lost_reason).slice(0, 40);
+        if (patch.repeats !== undefined) cur.repeats = String(patch.repeats).slice(0, 6);
+        if (patch.status !== undefined) {
+          cur.status = patch.status;
+          if (patch.status !== 'lost' && patch.lost_reason === undefined) cur.lost_reason = '';
+          if (patch.status !== 'new' && !cur.contacted_at) cur.contacted_at = now; // first time anyone acted on the lead
+        }
+        cur.updated_at = now;
+        sh.getRange(rowNum, 1, 1, LEAD_COLUMNS.length).setNumberFormat('@').setValues([LEAD_COLUMNS.map(function (c) { return cur[c]; })]);
         return { ok: true, found: true };
       }
     }

@@ -27,6 +27,9 @@ select,textarea{border:1.5px solid var(--line);border-radius:10px;padding:7px 10
 .grid{display:grid;gap:12px}@media(min-width:720px){.grid{grid-template-columns:1fr 1fr}.grid .wide{grid-column:1/-1}}
 .card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:14px}.card h2{margin:0 0 10px;font-size:15px}
 .bar{display:flex;align-items:center;gap:8px;margin:5px 0;font-size:13.5px}.bar i{display:block;height:10px;border-radius:5px;background:var(--teal);min-width:2px}.bar span:first-child{width:96px;color:var(--grey);flex:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.kpi.warn{border-color:#e5a29d;background:#fdf1f0}.kpi.warn b{color:var(--red)}.pill.red{background:#fdecea;color:var(--red)}.pill.grey{background:#eef2f3;color:var(--grey)}.pill.gold{background:#fbf3cf;color:#7a5b00}
+.meta{color:var(--grey);font-size:12.5px;margin:2px 0 0}.lead input.area{width:100%;margin-top:8px;border:1.5px solid var(--line);border-radius:10px;padding:7px 10px;background:#fff}
+.lead.stale{border-color:#e5a29d}.tbl{width:100%;border-collapse:collapse;font-size:13.5px}.tbl td,.tbl th{padding:5px 4px;text-align:left;border-bottom:1px solid var(--line)}.tbl th{color:var(--grey);font-weight:600;font-size:12.5px}
 .empty{color:var(--grey);padding:18px;text-align:center}.note{color:var(--grey);font-size:12.5px}
 #login{max-width:340px;margin:12vh auto;background:#fff;border:1px solid var(--line);border-radius:18px;padding:24px}#login h1{margin:0 0 4px;font-size:20px}#login input{width:100%;padding:12px;border:1.5px solid var(--line);border-radius:12px;margin:12px 0}
 .err{color:var(--red);min-height:20px;font-size:13.5px}[hidden]{display:none!important}
@@ -49,6 +52,8 @@ select,textarea{border:1.5px solid var(--line);border-radius:10px;padding:7px 10
 <script>
 (function(){
   var STATUS={new:'New',contacted:'Contacted',hot:'Hot',demo_booked:'Demo booked',enrolled:'Enrolled',lost:'Lost'};
+  var LOST={price:'Fees too high',location:'Too far',no_answer:'Not answering',chose_other:'Chose another class',not_interested:'Not interested',other:'Other'};
+  var TRIG={button:'Tapped a button','auto-scroll':'Auto (scrolled)','auto-exit':'Auto (about to leave)'};
   var state={data:null,filter:'all',q:''};
   var $=function(s){return document.querySelector(s)};
   function esc(t){return String(t==null?'':t).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
@@ -56,11 +61,12 @@ select,textarea{border:1.5px solid var(--line);border-radius:10px;padding:7px 10
   function show(loggedIn){$('#login').hidden=loggedIn;$('#app').hidden=!loggedIn}
   function ago(iso){var m=Math.round((Date.now()-new Date(iso))/60000);if(m<1)return'just now';if(m<60)return m+' min ago';var h=Math.round(m/60);if(h<24)return h+' h ago';var d=Math.round(h/24);return d+' d ago'}
   function load(){return api('data?days=30').then(function(r){if(r.status===401){show(false);return null}if(!r.ok)throw new Error(r.status);return r.json()}).then(function(d){if(!d)return;state.data=d;show(true);render()}).catch(function(){$('#list').innerHTML='<div class="empty">Could not load data. Check that Google Sheets is connected, then tap Refresh.</div>';show(true)})}
-  function kpi(label,value){return'<div class="kpi"><b>'+esc(value)+'</b><span>'+esc(label)+'</span></div>'}
+  function kpi(label,value,cls){return'<div class="kpi'+(cls?' '+cls:'')+'"><b>'+esc(value)+'</b><span>'+esc(label)+'</span></div>'}
+  function mins(m){if(m==null)return'–';if(m<60)return m+' min';var h=Math.round(m/6)/10;return h<48?h+' h':Math.round(h/24)+' d'}
   function render(){
     var d=state.data,t=d.summary.totals,f=d.summary.funnel;
-    $('#sub').textContent=d.storage==='sheets'?'Google Sheets connected':'Local test data';
-    $('#kpis').innerHTML=kpi('New today',t.today)+kpi('Last 7 days',t.week)+kpi('Hot leads',t.hot)+kpi('Demo booked',t.demo_booked)+kpi('Form conversion (7d)',f.conversionPct7==null?'–':f.conversionPct7+'%');
+    $('#sub').textContent=d.storage==='file'?'Local test data':'Google Sheets connected';
+    $('#kpis').innerHTML=kpi('New today',t.today)+kpi('Last 7 days',t.week)+kpi('Hot leads',t.hot)+kpi('Demo booked',t.demo_booked)+kpi('Not called in 24 h',d.summary.response.stale,d.summary.response.stale>0?'warn':'');
     var counts={all:d.leads.length};Object.keys(STATUS).forEach(function(s){counts[s]=d.summary.byStatus[s]||0});
     $('#chips').innerHTML=['all'].concat(Object.keys(STATUS)).map(function(s){return'<button class="chip" data-f="'+s+'" aria-pressed="'+(state.filter===s)+'">'+(s==='all'?'All':STATUS[s])+' '+counts[s]+'</button>'}).join('');
     renderList();renderInsights();
@@ -70,20 +76,34 @@ select,textarea{border:1.5px solid var(--line);border-radius:10px;padding:7px 10
     if(!rows.length){$('#list').innerHTML='<div class="empty">No leads here yet.</div>';return}
     $('#list').innerHTML=rows.map(function(l){
       var opts=Object.keys(STATUS).map(function(s){return'<option value="'+s+'"'+(l.status===s?' selected':'')+'>'+STATUS[s]+'</option>'}).join('');
-      return'<div class="lead'+(l.status==='hot'?' hot':'')+'" data-id="'+esc(l.id)+'"><div class="row"><span class="name">'+esc(l.name)+'</span><span class="pill">Class '+esc(String(l.class_band).replace('-','–'))+'</span><span class="when" title="'+esc(l.created_at)+'">'+ago(l.created_at)+'</span></div>'+
-      '<div class="phone">+91 '+esc(l.phone)+'</div><div class="actions"><a class="btn fill sm" href="tel:+91'+esc(l.phone)+'">Call</a><a class="btn sm" target="_blank" rel="noopener noreferrer" href="https://wa.me/91'+esc(l.phone)+'">WhatsApp</a><select data-act="status" aria-label="Status">'+opts+'</select></div>'+
+      var ageH=(Date.now()-new Date(l.created_at))/3600000,stale=l.status==='new'&&ageH>24,badges='';
+      if(stale)badges+='<span class="pill red">Not called · '+Math.round(ageH)+' h</span>';
+      if(l.contacted_at)badges+='<span class="pill grey">Called after '+mins(Math.max(0,Math.round((new Date(l.contacted_at)-new Date(l.created_at))/60000)))+'</span>';
+      if(Number(l.repeats)>0)badges+='<span class="pill gold">↻ '+esc(l.repeats)+' repeat'+(Number(l.repeats)>1?'s':'')+'</span>';
+      var meta=[[l.city,l.region].filter(Boolean).join(', '),l.device,TRIG[l.trigger]].filter(Boolean).join(' · ');
+      var lost=l.status==='lost'?'<select data-act="lost" aria-label="Why lost">'+'<option value="">Why lost?</option>'+Object.keys(LOST).map(function(k){return'<option value="'+k+'"'+(l.lost_reason===k?' selected':'')+'>'+LOST[k]+'</option>'}).join('')+'</select>':'';
+      return'<div class="lead'+(l.status==='hot'?' hot':'')+(stale?' stale':'')+'" data-id="'+esc(l.id)+'"><div class="row"><span class="name">'+esc(l.name)+'</span><span class="pill">Class '+esc(String(l.class_band).replace('-','–'))+'</span>'+badges+'<span class="when" title="'+esc(l.created_at)+'">'+ago(l.created_at)+'</span></div>'+(meta?'<div class="meta">'+esc(meta)+'</div>':'')+
+      '<div class="phone">+91 '+esc(l.phone)+'</div><div class="actions"><a class="btn fill sm" href="tel:+91'+esc(l.phone)+'">Call</a><a class="btn sm" target="_blank" rel="noopener noreferrer" href="https://wa.me/91'+esc(l.phone)+'">WhatsApp</a><select data-act="status" aria-label="Status">'+opts+'</select>'+lost+'</div>'+
+      '<input class="area" data-act="area" placeholder="Area (e.g. Bansilal Nagar)" maxlength="60" value="'+esc(l.area)+'">'+
       '<textarea data-act="notes" placeholder="Notes (saved when you tap away)" maxlength="500">'+esc(l.notes)+'</textarea></div>'}).join('');
   }
   function bars(rows,total){var max=Math.max.apply(null,[1].concat(rows.map(function(r){return r[1]})));return rows.length?rows.map(function(r){return'<div class="bar"><span title="'+esc(r[0])+'">'+esc(r[0])+'</span><i style="width:'+Math.max(2,Math.round(r[1]/max*55))+'%"></i><b>'+r[1]+'</b></div>'}).join(''):'<div class="empty">No data yet</div>'}
   function chart(perDay){var max=Math.max.apply(null,[1].concat(perDay.map(function(p){return p.leads}))),w=600,h=130,bw=w/perDay.length;
     return'<svg viewBox="0 0 '+w+' '+(h+22)+'" width="100%" role="img" aria-label="Leads per day, last 30 days">'+perDay.map(function(p,i){var bh=Math.round(p.leads/max*h);return'<rect x="'+(i*bw+1.5)+'" y="'+(h-bh)+'" width="'+(bw-3)+'" height="'+Math.max(bh,1)+'" rx="2" fill="'+(p.leads?'#167da5':'#d5e5e9')+'"><title>'+p.day+': '+p.leads+'</title></rect>'}).join('')+'<text x="0" y="'+(h+16)+'" font-size="11" fill="#5b6f77">'+perDay[0].day.slice(5)+'</text><text x="'+w+'" y="'+(h+16)+'" font-size="11" fill="#5b6f77" text-anchor="end">'+perDay[perDay.length-1].day.slice(5)+'</text></svg>'}
+  function speed(r){return'<div class="bar"><span>Median time</span><b>'+mins(r.medianMin)+'</b></div><div class="bar"><span>Called in 1 h</span><b>'+(r.within1hPct==null?'–':r.within1hPct+'%')+'</b></div><div class="bar"><span>Still new</span><b>'+r.waiting+'</b></div><div class="bar"><span>New over 24 h</span><b style="color:'+(r.stale?'var(--red)':'inherit')+'">'+r.stale+'</b></div><div class="note">Time from enquiry to the first status change. The first call wins the student.</div>'}
+  function triggerTable(rows){return'<table class="tbl"><tr><th>How it opened</th><th>Opened</th><th>Leads</th><th>Rate</th></tr>'+rows.map(function(r){return'<tr><td>'+esc(TRIG[r.trigger])+'</td><td>'+r.opens+'</td><td>'+r.leads+'</td><td>'+(r.pct==null?'–':r.pct+'%')+'</td></tr>'}).join('')+'</table><div class="note">Shows whether the automatic popup helps. Counts start from this update.</div>'}
   function renderInsights(){
     var s=state.data.summary,f=s.funnel,c=s.ctaByAction;
     $('#tab-insights').innerHTML='<div class="grid"><div class="card wide"><h2>Leads per day (last 30 days)</h2>'+chart(s.perDay)+'</div>'+
+    '<div class="card"><h2>Speed to first call</h2>'+speed(s.response)+'</div>'+
+    '<div class="card"><h2>How parents reach the form (30 days)</h2>'+triggerTable(s.byTrigger)+'</div>'+
     '<div class="card"><h2>By class</h2>'+bars(Object.keys(s.byClass).map(function(k){return['Class '+k.replace('-','–'),s.byClass[k]]}))+'</div>'+
     '<div class="card"><h2>Where leads come from</h2>'+bars(s.bySource)+'</div>'+
     '<div class="card"><h2>Pipeline</h2>'+bars(Object.keys(STATUS).map(function(k){return[STATUS[k],s.byStatus[k]||0]}))+'</div>'+
     '<div class="card"><h2>Form funnel (30 days)</h2><div class="bar"><span>Saw the form</span><b>'+f.formViews+'</b></div><div class="bar"><span>Leads (7d)</span><b>'+f.leads7+'</b></div><div class="note">Form conversion = leads ÷ people who saw the form, last 7 days.</div></div>'+
+    '<div class="card"><h2>Device</h2>'+bars(s.byDevice)+'</div>'+
+    '<div class="card"><h2>Where from (approx., by connection)</h2>'+bars(s.byCity)+'<div class="note">Mobile data can show the nearest big city. Use the Area box for the real one.</div></div>'+
+    '<div class="card"><h2>Why leads were lost</h2>'+bars(Object.keys(LOST).map(function(k){return[LOST[k],s.lostReasons[k]||0]}).filter(function(r){return r[1]>0}))+'</div>'+
     '<div class="card wide"><h2>Taps on contact buttons (30 days)</h2>'+bars([['WhatsApp',c.whatsapp],['Call',c.call],['Map',c.map],['Enquiry button',c.enquiry_button],['Sticky bar',c.enquiry_bar]])+'<div class="note">Anonymous counts only. No names or numbers are tracked outside the form.</div></div></div>';
   }
   $('#loginForm').addEventListener('submit',function(e){e.preventDefault();$('#loginErr').textContent='';api('login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({password:$('#pw').value})}).then(function(r){if(r.status===429){$('#loginErr').textContent='Too many attempts. Try again in 15 minutes.';return}if(!r.ok){$('#loginErr').textContent='Wrong password.';return}$('#pw').value='';return load()}).catch(function(){$('#loginErr').textContent='Could not sign in. Try again.'})});
@@ -92,7 +112,11 @@ select,textarea{border:1.5px solid var(--line);border-radius:10px;padding:7px 10
   $('#q').addEventListener('input',function(e){state.q=e.target.value;renderList()});
   document.addEventListener('click',function(e){var chip=e.target.closest('.chip');if(chip){state.filter=chip.dataset.f;render()}var tab=e.target.closest('[data-tab]');if(tab){document.querySelectorAll('[data-tab]').forEach(function(b){b.setAttribute('aria-selected',b===tab)});$('#tab-leads').hidden=tab.dataset.tab!=='leads';$('#tab-insights').hidden=tab.dataset.tab!=='insights'}});
   function save(id,patch,done){api('status',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(Object.assign({id:id},patch))}).then(function(r){if(!r.ok)throw new Error();return done&&done()}).catch(function(){alert('Could not save. Please try again.')})}
-  document.addEventListener('change',function(e){var card=e.target.closest('.lead');if(!card)return;if(e.target.dataset.act==='status'){var id=card.dataset.id,v=e.target.value;save(id,{status:v},function(){state.data.leads.find(function(l){return l.id===id}).status=v;var d=state.data;d.summary.byStatus=d.leads.reduce(function(a,l){a[l.status]=(a[l.status]||0)+1;return a},{});d.summary.totals.hot=d.summary.byStatus.hot||0;d.summary.totals.demo_booked=d.summary.byStatus.demo_booked||0;render()})}if(e.target.dataset.act==='notes'){var nid=card.dataset.id,nv=e.target.value;save(nid,{notes:nv},function(){state.data.leads.find(function(l){return l.id===nid}).notes=nv})}});
+  document.addEventListener('change',function(e){var card=e.target.closest('.lead');if(!card)return;var id=card.dataset.id,act=e.target.dataset.act,lead=state.data.leads.find(function(l){return l.id===id});
+    if(act==='status')save(id,{status:e.target.value},load);
+    else if(act==='lost')save(id,{lost_reason:e.target.value},function(){lead.lost_reason=e.target.value});
+    else if(act==='area')save(id,{area:e.target.value},function(){lead.area=e.target.value});
+    else if(act==='notes')save(id,{notes:e.target.value},function(){lead.notes=e.target.value})});
   load();setInterval(function(){if(!document.hidden&&state.data)load()},60000);
 })();
 </script>
