@@ -269,3 +269,9 @@ test('stats: speed to first contact, stale leads, trigger funnel, device, city, 
   assert.equal(s.byCity[0][0] === 'Unknown' || s.byCity.some(r => r[0] === 'Pune, Maharashtra'), true);
   assert.equal(s.lostReasons.price, 1);
 });
+
+test('keep me signed in: 30-day cookie only when asked, 12 hours otherwise', async () => {
+  const login = remember => handleAdmin(new Request('https://x.test/api/admin/login', { method: 'POST', headers: { 'x-requested-with': 'fetch' }, body: JSON.stringify({ password: 'correct horse', remember }) }), { store: null, env });
+  assert.match((await login(true)).headers.get('set-cookie'), /Max-Age=2592000/);
+  assert.match((await login(false)).headers.get('set-cookie'), /Max-Age=43200/);
+});

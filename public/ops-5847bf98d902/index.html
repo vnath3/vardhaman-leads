@@ -38,7 +38,7 @@ select,textarea{border:1.5px solid var(--line);border-radius:10px;padding:7px 10
 <body>
 <section id="login" hidden>
   <h1>Vardhaman Academy</h1><div class="note">Leads dashboard. Authorised access only.</div>
-  <form id="loginForm"><input id="pw" type="password" placeholder="Password" autocomplete="current-password" required><div class="err" id="loginErr" role="alert"></div><button class="btn fill" style="width:100%">Sign in</button></form>
+  <form id="loginForm"><input type="text" name="username" value="admin" autocomplete="username" hidden><input id="pw" name="password" type="password" placeholder="Password" autocomplete="current-password" required><label style="display:flex;gap:8px;align-items:center;margin:10px 0;font-size:14px"><input type="checkbox" id="remember" checked> Keep me signed in on this device (30 days)</label><div class="err" id="loginErr" role="alert"></div><button class="btn fill" style="width:100%">Sign in</button></form>
 </section>
 <div id="app" hidden>
   <header class="top"><h1>Leads <small id="sub"></small></h1><button class="btn sm" id="refresh">Refresh</button><button class="btn sm" id="logout">Sign out</button></header>
@@ -106,7 +106,7 @@ select,textarea{border:1.5px solid var(--line);border-radius:10px;padding:7px 10
     '<div class="card"><h2>Why leads were lost</h2>'+bars(Object.keys(LOST).map(function(k){return[LOST[k],s.lostReasons[k]||0]}).filter(function(r){return r[1]>0}))+'</div>'+
     '<div class="card wide"><h2>Taps on contact buttons (30 days)</h2>'+bars([['WhatsApp',c.whatsapp],['Call',c.call],['Map',c.map],['Enquiry button',c.enquiry_button],['Sticky bar',c.enquiry_bar]])+'<div class="note">Anonymous counts only. No names or numbers are tracked outside the form.</div></div></div>';
   }
-  $('#loginForm').addEventListener('submit',function(e){e.preventDefault();$('#loginErr').textContent='';api('login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({password:$('#pw').value})}).then(function(r){if(r.status===429){$('#loginErr').textContent='Too many attempts. Try again in 15 minutes.';return}if(!r.ok){$('#loginErr').textContent='Wrong password.';return}$('#pw').value='';return load()}).catch(function(){$('#loginErr').textContent='Could not sign in. Try again.'})});
+  $('#loginForm').addEventListener('submit',function(e){e.preventDefault();$('#loginErr').textContent='';api('login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({password:$('#pw').value,remember:$('#remember').checked})}).then(function(r){if(r.status===429){$('#loginErr').textContent='Too many attempts. Try again in 15 minutes.';return}if(!r.ok){$('#loginErr').textContent='Wrong password.';return}$('#pw').value='';return load()}).catch(function(){$('#loginErr').textContent='Could not sign in. Try again.'})});
   $('#logout').addEventListener('click',function(){api('logout',{method:'POST'}).then(function(){state.data=null;show(false)})});
   $('#refresh').addEventListener('click',load);
   $('#q').addEventListener('input',function(e){state.q=e.target.value;renderList()});
